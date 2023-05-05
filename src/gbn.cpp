@@ -1,16 +1,22 @@
 #include "../include/simulator.h"
-
-#include <stdio.h>
-#include <stdlib.h>
 #include <iostream>
+#include "../include/simulator.h"
+#include <queue>
 #include <cstring>
-#include <vector>
+#include <cstdio>   
 
-using namespace std;
+
+std::vector<struct pkt> packetList;
+std::vector<struct msg> messageList;
+int winSize;
+int baseSeqNum;
+int nextSeqNum;
+int seqNumB;
+
+
 
 /* ******************************************************************
  ALTERNATING BIT AND GO-BACK-N NETWORK EMULATOR: VERSION 1.1  J.F.Kurose
-
    This code should be used for PA2, unidirectional data transfer 
    protocols (from A to B). Network properties:
    - one way network delay averages five time units (longer if there
@@ -22,100 +28,110 @@ using namespace std;
 **********************************************************************/
 
 /********* STUDENTS WRITE THE NEXT SEVEN ROUTINES *********/
-float TIMEOUT = 25.0;
-
-int seq_number_A; 
-int ack_number_A; 
-int window_size_A;
-int send_base;
-int next_seq_num;
-
-int expected_seq_at_B; 
-
-vector <msg> msg_buffer;
-
-void send_data();
-int generate_checksum(pkt packet);
-bool is_pkt_corrupt(pkt packet);
 
 /* called from layer 5, passed the data to be sent to other side */
+/* the following rouytine will be called once (only) before any other */
+/* entity B routines are called. You can use it to do any initialization */
+void B_init()
+{
+    seqNumB = 1;
+}
+
+bool isValidPackAtB(pkt pack){
+    if(pack.seqnum == seqNumB){
+        return true;
+    }
+    return false;
+}
+
+bool validateChecksum(pkt packet, int checksum){
+
+    if(packet.checksum == checksum){
+        return true;
+    }
+    return false;
+    
+}
+
+
+int calcChecksum(int seq, int ack, char *message, int n){
+    
+    int sum = 0;
+    for(int i =0; i<n; i++){
+        sum+= (int)message[i];
+    }
+    sum += seq + ack;
+    return sum;
+}
 void A_output(struct msg message)
 {
-	//cout<<"*****A output ****** msg to buffer : "<<message.data<<" , adding at : "<<(msg_buffer.size()-1)<<endl ;
-	
-	//Adding the message to a queue
-	msg_buffer.push_back(message);
-	
-	// Starting a sending routine
-	send_data();
-}
+    messageList.push_back(message);
+    int max_seq_num = baseSeqNum + winSize;
+    while(nextSeqNum < max_seq_num && nextSeqNum < messageList.size()) {
+    pkt next_pkt;
+    next_pkt.seqnum= nextSeqNum;
+    next_pkt.acknum= 0;
+    strcpy(next_pkt.payload, message.data);
+    next_pkt.checksum= calcChecksum(next_pkt.seqnum,next_pkt.acknum, next_pkt.payload, strlen(next_pkt.payload));
 
-void send_data(){
-	//cout<< "******* udt_send ********* next_seq_num : "<< next_seq_num << " , send_base : "<< send_base<< endl;
-	while(next_seq_num < send_base + window_size_A && next_seq_num<msg_buffer.size()){
+    packetList.push_back(next_pkt);
+    tolayer3(0, next_pkt);
 		
-		msg message = msg_buffer[next_seq_num];
-		
-		//cout<<"Sending message : "<<message.data<<", at next_seq_num : "<<next_seq_num<<endl;
-		// Create packet 
-		pkt packet;
-		
-		strncpy(packet.payload,message.data,sizeof(packet.payload)); // Copying message from above to current packet payload
-		packet.seqnum = next_seq_num;
-		packet.acknum = ack_number_A;
-		packet.checksum = 0;
-		
-		packet.checksum = generate_checksum(packet);
-		
-		tolayer3(0, packet);
-		
-		if(send_base == next_seq_num){
+		if(baseSeqNum == nextSeqNum){
 			//cout<<"starting timeout in send data for : "<<next_seq_num<<endl;
-			starttimer(0, TIMEOUT);
+			starttimer(0, 20);
 		}
 		
-		next_seq_num++;
-		
-	}
+		nextSeqNum++;
+    }
 }
+
 
 /* called from layer 3, when a packet arrives for layer 4 */
-void A_input(struct pkt packet)
+void A_input(pkt packet)
 {
-	//cout<< "**********A_input********* base num : "<<send_base<<endl;
-	
-	if(!is_pkt_corrupt(packet)){
-		send_base = packet.acknum +1;
+    int packChecksum= calcChecksum(packet.seqnum, packet.acknum, packet.payload,strlen(packet.payload));
+    if(validateChecksum(packet, packChecksum) == true && packet.acknum >= baseSeqNum && packet.acknum < nextSeqNum){
+        baseSeqNum = packet.acknum + 1;
 		
-		if(send_base == next_seq_num)
+		if(baseSeqNum == nextSeqNum)
 			stoptimer(0);
 		else{
-			stoptimer(0);
-			starttimer(0, TIMEOUT);
+			starttimer(0, 20);
 		}
-		//cout<< "ack pkt not corrupt at A"<<endl;
-	}
+    }
+    
 }
+
 
 /* called when A's timer goes off */
 void A_timerinterrupt()
 {
-	//cout<< "**********A_timerinterrupt********* base num : "<<send_base<<endl;
-	next_seq_num = send_base;
-	send_data();
+    int max_seq_num = baseSeqNum + winSize;
+   // pkt packA= packetList[nextSeqNum];
+    //tolayer3(0,packA);
+    nextSeqNum= baseSeqNum;
+    while(nextSeqNum < max_seq_num && nextSeqNum < packetList.size()) {
+    
+
+        tolayer3(0, packetList[nextSeqNum]);
+		
+		if(baseSeqNum == nextSeqNum){
+			//cout<<"starting timeout in send data for : "<<next_seq_num<<endl;
+			starttimer(0, 20);
+		}
+		
+		nextSeqNum++;
+    }
 }  
 
 /* the following routine will be called once (only) before any other */
 /* entity A routines are called. You can use it to do any initialization */
 void A_init()
 {
-	seq_number_A = 0; 
-	ack_number_A = 0; 
-	window_size_A = getwinsize();
-	send_base = 0;
-	next_seq_num = 0;
-	
-	//cout<< "**********A_INIT********* Window size at A : "<<window_size_A<<endl;
+    winSize= getwinsize();
+    baseSeqNum=0;
+    nextSeqNum=0;
 }
 
 /* Note that with simplex transfer from a-to-B, there is no B_output() */
@@ -123,51 +139,21 @@ void A_init()
 /* called from layer 3, when a packet arrives for layer 4 at B*/
 void B_input(struct pkt packet)
 {
-	//cout<< "**********B_input********* : "<<packet.payload<<", expected seq num : "<<expected_seq_at_B<<", pkt seq number : "<<packet.seqnum<<endl;
-	if(!is_pkt_corrupt(packet) && expected_seq_at_B == packet.seqnum){// add packet corrupttion check
-		//cout<< "**********Sending data to layer 5 of B********* "<<endl;
-		tolayer5(1, packet.payload);
-		
-		pkt recev_ack;
-		
-		recev_ack.acknum = expected_seq_at_B;
-		recev_ack.checksum = 0;
-		
-		recev_ack.checksum = generate_checksum(recev_ack);
-		
-		tolayer3(1, recev_ack);	
-		
-		expected_seq_at_B++;	
-	}
+    bool isPktValid= validateChecksum(packet, calcChecksum(packet.seqnum, packet.acknum, packet.payload, strlen(packet.payload)));
+    bool expValueAtB= isValidPackAtB(packet);
+
+    if(isPktValid && expValueAtB){
+        tolayer5(1, packet.payload);
+        pkt pktAck;
+        pktAck.seqnum= seqNumB;
+        pktAck.acknum= 0;
+        pktAck.checksum= calcChecksum(pktAck.seqnum,pktAck.acknum, pktAck.payload, strlen(pktAck.payload));
+        tolayer3(1, pktAck);
+        seqNumB++;
+    }
+    
 }
 
-/* the following rouytine will be called once (only) before any other */
-/* entity B routines are called. You can use it to do any initialization */
-void B_init()
-{
-	expected_seq_at_B = 0;
-}
 
-int generate_checksum(pkt packet){
-	int checksum = 0;
-	
-	int seq_number = packet.seqnum;
-	int ack_number = packet.acknum;
-	
-	checksum += seq_number;
-	checksum += ack_number;
-	
-	for(int p=0; p<sizeof(packet.payload); p++)
-		checksum += packet.payload[p];
-	
-	return ~checksum;
-}
 
-bool is_pkt_corrupt(pkt packet){
-	
-	if(packet.checksum == generate_checksum(packet))
-		return false;
-	else
-		return true;
-		
-}
+
